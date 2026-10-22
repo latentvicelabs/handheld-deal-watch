@@ -4,6 +4,11 @@ on:
     # GitHub's 5-min minimum is not a latency guarantee. Offset to avoid :00 stampede.
     - cron: '3,13,23,33,43,53 * * * *'
   workflow_dispatch:
+    inputs:
+      test_notification:
+        description: Send a clearly labeled setup notification test
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -27,6 +32,21 @@ jobs:
           python-version: '3.12'
       - name: Run validation tests
         run: python -m unittest discover -s tests -v
+      - name: Test Issue notification delivery
+        if: inputs.test_notification == true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PYTHON'
+          import os
+          from monitor import api_request
+          base = "https://api.github.com/repos/" + os.environ["GITHUB_REPOSITORY"]
+          issue = api_request(base + "/issues", "POST", {
+              "title": "[Setup test] Handheld deal alerts are connected — no deal",
+              "body": "This is a notification delivery test from GitHub Actions, not a price alert. Scheduled scans are installed. Real alerts require verified stock, model, USD price and the exceptional threshold. This setup test closes automatically."})
+          print("Created notification test:", issue["html_url"])
+          api_request(base + "/issues/" + str(issue["number"]), "PATCH", {"state": "closed"})
+          PYTHON
       - name: Check merchants and discovery feeds
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
