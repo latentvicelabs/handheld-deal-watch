@@ -6,6 +6,8 @@ starting price as a purchasable offer. Only merchant-confirmed SKU/variant,
 USD price and stock can generate an exceptional deal alert.
 """
 from __future__ import annotations
+from concurrent.futures import ThreadPoolExecutor
+from zoneinfo import ZoneInfo
 import datetime as dt
 import hashlib
 import json
@@ -250,28 +252,43 @@ def report_issue(entry: dict) -> str:
 def scan() -> dict:
     result = {'checked_at_utc': dt.datetime.now(dt.timezone.utc).isoformat(), 'merchants': [],
               'offers': [], 'discovery': [], 'errors': [], 'alerts': []}
-    for spec in SHOPS:
+    def merchant(spec):
+        url = spec['url'].split('?')[0] + '.js' if spec['kind'] == 'shopify' else spec['url']
         try:
-            # Shopify product endpoint returns per-variant exact price and availability.
-            url = spec['url'].split('?')[0] + '.js' if spec['kind'] == 'shopify' else spec['url']
             body = fetch(url)
+            if spec['kind'] == 'shopify':
+                origin = 'https://' + urlparse(spec['url']).netloc
+                currency = json.loads(fetch(origin + '/cart.js')).get('currency')
+                if currency != 'USD':
+                    raise ValueError(f'Unverified USD currency: {currency!r}')
             found = scan_shopify(spec, body) if spec['kind'] == 'shopify' else scan_html(spec, body)
-            result['merchants'].append({'merchant': spec['seller'], 'url': spec['url'], 'verified': len(found)})
-            result['offers'].extend(found)
-        except (HTTPError, URLError, ValueError, ET.ParseError, KeyError, TimeoutError, RuntimeError) as e:
-            result['errors'].append({'url': spec['url'], 'error': str(e)[:180]})
-    # Discovery RSS is review-only. An RSS item is *never* purchase-ready evidence.
-    for url in FEEDS:
+            return {'merchant': spec['seller'], 'url': spec['url'], 'verified': len(found)}, found, None
+        except Exception as exc:
+            return None, [], {'url': spec['url'], 'error': str(exc)[:180]}
+
+    def feed(url):
         try:
-            result['discovery'].extend(feed_discovery(url, fetch(url)))
-        except (HTTPError, URLError, ValueError, ET.ParseError, TimeoutError, RuntimeError) as e:
-            result['errors'].append({'url': url, 'error': str(e)[:180]})
+            return feed_discovery(url, fetch(url)), None
+        except Exception as exc:
+            return [], {'url': url, 'error': str(exc)[:180]}
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for status, found, error in pool.map(merchant, SHOPS):
+            if status:
+                result['merchants'].append(status)
+            result['offers'].extend(found)
+            if error:
+                result['errors'].append(error)
+        for found, error in pool.map(feed, FEEDS):
+            result['discovery'].extend(found)
+            if error:
+                result['errors'].append(error)
     return result
 
 
 def main():
     output = Path(os.getenv('REPORT_FILE', 'report.json'))
-    if dt.datetime.now(dt.timezone(dt.timedelta(hours=-4))).date() > END:
+    if dt.datetime.now(ZoneInfo('America/New_York')).date() > END:
         print('Tracker window ended 2026-11-15. Exiting.'); return 0
     data = scan()
     data['offers'].sort(key=lambda d: (d['level'] != 'exceptional', d['before_tax'] or 9e9))
@@ -292,6 +309,20 @@ def main():
     print(f"Scanned {len(SHOPS)} direct merchant pages and {len(FEEDS)} RSS feeds; "
           f"{len(data['offers'])} stock-confirmed matched variants; "
           f"{len(data['discovery'])} unverified discoveries; {len(data['errors'])} failures")
+    for error in data['errors']:
+        print(f"SOURCE FAILED: {error['url']} — {error['error']}")
+    summary = os.getenv('GITHUB_STEP_SUMMARY')
+    if summary:
+        lines = ['## OLED handheld scan', f"Matched offers: {len(data['offers'])}; source failures: {len(data['errors'])}.", '',
+                 '| Model | Seller | Price | Shipping | Classification |', '|---|---|---:|---:|---|']
+        for offer in data['offers']:
+            lines.append(f"| {offer['label']} | {offer['seller']} | ${offer['price']:.2f} | {offer['shipping']} | {offer['level']} |")
+        lines.extend(['', '### Source failures'] + [f"- {e['url']}: {e['error']}" for e in data['errors']])
+        with open(summary, 'a', encoding='utf-8') as handle:
+            handle.write('\n'.join(lines) + '\n')
+    if not data['offers']:
+        print('ERROR: no matched in-stock offers; coverage is unverified.', file=sys.stderr)
+        return 1
     return 1 if any(a['status'] == 'FAILED' for a in data['alerts']) else 0
 
 

@@ -1,4 +1,6 @@
 import unittest
+from unittest.mock import patch
+import json
 import monitor
 
 SHOP = {'url': 'https://onexplayerstore.com/products/f1pro', 'seller': 'ONEXPLAYER official', 'condition': 'new', 'shipping': 0, 'kind': 'shopify'}
@@ -43,6 +45,22 @@ class DealsTest(unittest.TestCase):
         self.assertEqual(monitor.scan_html(spec, body), [])
         self.assertEqual(len(monitor.scan_html(spec, body.replace('OutOfStock', 'InStock'))), 1)
         self.assertEqual(monitor.scan_html(spec, body.replace('USD', 'CAD').replace('OutOfStock', 'InStock')), [])
+
+    def test_scan_rejects_non_usd_shopify(self):
+        product = json.dumps({'title': 'OneXFly F1 Pro OLED', 'variants': [
+            {'id': 2, 'title': 'HX 370 32GB', 'price': 80000, 'available': True}]})
+        with patch.object(monitor, 'SHOPS', [SHOP]), patch.object(monitor, 'FEEDS', []), patch.object(
+                monitor, 'fetch', side_effect=lambda url: '{"currency":"CAD"}' if url.endswith('/cart.js') else product):
+            result = monitor.scan()
+        self.assertEqual(result['offers'], [])
+        self.assertIn('USD', result['errors'][0]['error'])
+
+    def test_scan_reports_outage_without_offer(self):
+        with patch.object(monitor, 'SHOPS', [SHOP]), patch.object(monitor, 'FEEDS', []), patch.object(
+                monitor, 'fetch', side_effect=TimeoutError('blocked')):
+            result = monitor.scan()
+        self.assertEqual(result['offers'], [])
+        self.assertEqual(len(result['errors']), 1)
 
     def test_id_stable(self):
         a = monitor.deal(SHOP, 'OneXFly F1 Pro OLED', 800, True, variant='AMD AI 9 HX 370 - 32G + 1TB')
