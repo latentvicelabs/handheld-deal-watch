@@ -2,12 +2,18 @@
 
 Independent, conservative **10-minute** GitHub Actions deal watcher through **November 15, 2026**. Python standard library only. It never purchases anything.
 
+## Deployment status
+
+Deployed on October 21, 2026. The initial live scan successfully read the ONEXPLAYER endpoints, but returned no in-stock matching variants. Best Buy timed out, and the other HTML adapters did not extract verified offers. Current automatic alert coverage is ONEXPLAYER F1 Pro HX 370 32GB; other sources remain review-only until their adapters yield verified offers. GitHub Issue notifications are enabled for the owner. No ntfy mobile subscription is configured.
+
+Scans run concurrently, verify Shopify store currency is USD, and publish coverage details to the Actions summary. Total loss of validated merchant coverage fails the run rather than claiming no deals. Out-of-stock matching variants count as working coverage, not available offers.
+
 ## Setup
 
 1. Create a **new non-fork** repository named `latentvicelabs/handheld-deal-watch` and put these files on `main`. **Do not install into the unrelated `workflow_templates` ComfyUI fork**: fork schedules are disabled by default and its workflows have other jobs.
 2. In GitHub **Settings → Actions → General**, ensure Actions is enabled; in repository settings ensure Issues are enabled. Open **Actions → OLED handheld deal watch → Run workflow** for an initial execution and inspect the `report.json` artifact. Scheduled checks use `3,13,23,33,43,53` minutes of each hour (UTC); GitHub can delay/drop runs.
 3. For mobile pushes (optional but recommended), create an unpredictable `ntfy.sh` topic and subscribe to it using the ntfy app. Set repository secret **`NTFY_TOPIC`** to the topic name; do **not** commit a topic secret. Otherwise exceptional deals create GitHub Issues (check GitHub notifications / Watch settings). GitHub Issues are not a guaranteed real-time push channel.
-4. Review the Action logs/`report.json` after first run; merchants may block GitHub runner IPs. Failed sources are reported instead of producing fake prices. The existing hourly ChatGPT alert remains the independent fallback.
+4. Review the Action logs/`report.json` after first run; merchants may block GitHub runner IPs. Failed sources are reported instead of producing fake prices. Any separately configured ChatGPT alert is independent; this repository does not create or verify one.
 
 ## Watched prices, USD **including US shipping, before tax**
 

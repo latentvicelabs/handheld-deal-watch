@@ -256,13 +256,21 @@ def scan() -> dict:
         url = spec['url'].split('?')[0] + '.js' if spec['kind'] == 'shopify' else spec['url']
         try:
             body = fetch(url)
+            candidates = []
             if spec['kind'] == 'shopify':
                 origin = 'https://' + urlparse(spec['url']).netloc
                 currency = json.loads(fetch(origin + '/cart.js')).get('currency')
                 if currency != 'USD':
                     raise ValueError(f'Unverified USD currency: {currency!r}')
+                product = json.loads(body)
+                for variant in product.get('variants', []):
+                    model = product_model(str(product.get('title', '')) + ' ' + str(variant.get('title', '')))
+                    if model:
+                        candidates.append({'model': model, 'variant': variant.get('title'), 'in_stock': variant.get('available') is True,
+                                           'price': variant.get('price', 0) / 100})
             found = scan_shopify(spec, body) if spec['kind'] == 'shopify' else scan_html(spec, body)
-            return {'merchant': spec['seller'], 'url': spec['url'], 'verified': len(found)}, found, None
+            return {'merchant': spec['seller'], 'url': spec['url'], 'verified': len(found),
+                    'matched_variants': candidates, 'coverage_verified': bool(candidates or found)}, found, None
         except Exception as exc:
             return None, [], {'url': spec['url'], 'error': str(exc)[:180]}
 
@@ -317,11 +325,12 @@ def main():
                  '| Model | Seller | Price | Shipping | Classification |', '|---|---|---:|---:|---|']
         for offer in data['offers']:
             lines.append(f"| {offer['label']} | {offer['seller']} | ${offer['price']:.2f} | {offer['shipping']} | {offer['level']} |")
+        lines.extend(['', '### Stock checks'] + [f"- {m['merchant']}: {v['variant']} — {'in stock' if v['in_stock'] else 'out of stock'} (${v['price']:.2f})" for m in data['merchants'] for v in m.get('matched_variants', [])])
         lines.extend(['', '### Source failures'] + [f"- {e['url']}: {e['error']}" for e in data['errors']])
         with open(summary, 'a', encoding='utf-8') as handle:
             handle.write('\n'.join(lines) + '\n')
-    if not data['offers']:
-        print('ERROR: no matched in-stock offers; coverage is unverified.', file=sys.stderr)
+    if not any(m.get('coverage_verified') for m in data['merchants']):
+        print('ERROR: no validated merchant coverage.', file=sys.stderr)
         return 1
     return 1 if any(a['status'] == 'FAILED' for a in data['alerts']) else 0
 
