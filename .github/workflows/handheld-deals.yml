@@ -32,14 +32,27 @@ jobs:
           python-version: '3.12'
       - name: Run validation tests
         run: python -m unittest discover -s tests -v
-      - name: Test Issue notification delivery
+      - name: Test Issue and phone notification delivery
         if: inputs.test_notification == true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
           python - <<'PYTHON'
           import os
+          import json, re
+          from urllib.request import Request, urlopen
           from monitor import api_request
+          topic = os.getenv("NTFY_TOPIC", "").strip()
+          if topic:
+              if not re.fullmatch(r"[a-zA-Z0-9_-]{16,100}", topic):
+                  raise ValueError("Invalid notification topic")
+              req = Request("https://ntfy.sh/" + topic,
+                            data=b"Handheld deal push alerts are connected. This is a setup test, not a deal.",
+                            headers={"Title": "Handheld alerts: test", "Priority": "high"})
+              with urlopen(req, timeout=20) as response:
+                  receipt = json.load(response)
+              print("ntfy accepted test notification:", receipt["id"])
           base = "https://api.github.com/repos/" + os.environ["GITHUB_REPOSITORY"]
           issue = api_request(base + "/issues", "POST", {
               "title": "[Setup test] Handheld deal alerts are connected — no deal",
