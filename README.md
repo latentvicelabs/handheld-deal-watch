@@ -4,7 +4,7 @@ Independent, conservative **10-minute** GitHub Actions deal watcher through **No
 
 ## Deployment status
 
-Deployed on October 21, 2026. The initial live scan successfully read the ONEXPLAYER endpoints, but returned no in-stock matching variants. Best Buy timed out, and the other HTML adapters did not extract verified offers. Current automatic alert coverage is ONEXPLAYER F1 Pro HX 370 32GB; other sources remain review-only until their adapters yield verified offers. GitHub Issue notifications are enabled for the owner. No ntfy mobile subscription is configured.
+Deployed on October 21, 2026. The initial live scan successfully read the ONEXPLAYER endpoints, but returned no in-stock matching variants. Best Buy timed out, and the other HTML adapters did not extract verified offers. Current automatic alert coverage is ONEXPLAYER F1 Pro HX 370 32GB; other sources remain review-only until their adapters yield verified offers. GitHub Issue notifications are enabled for the owner. An ntfy push destination was configured on October 23, 2026. The notification self-test checks that ntfy accepts a high-priority test message; each phone must subscribe to the topic separately. The topic is stored only as the NTFY_TOPIC repository secret.
 
 Scans run concurrently, verify Shopify store currency is USD, and publish coverage details to the Actions summary. Total loss of validated merchant coverage fails the run rather than claiming no deals. Out-of-stock matching variants count as working coverage, not available offers.
 
