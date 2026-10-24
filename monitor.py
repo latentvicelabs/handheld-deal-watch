@@ -8,6 +8,7 @@ USD price and stock can generate an exceptional deal alert.
 from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from zoneinfo import ZoneInfo
+from expanded_sources import SOURCES, scan_source
 import datetime as dt
 import hashlib
 import json
@@ -27,9 +28,9 @@ TAX = 0.08  # NY estimate only; NOT a tax quote
 END = dt.date(2026, 11, 15)
 MODELS = {
     'legion_go_2_z2e_32': {'label': 'Legion Go 2 Z2 Extreme 32GB', 'watch': 1100, 'exceptional': 1000},
-    'onexfly_f1_pro_hx370_32': {'label': 'OneXFly F1 Pro HX 370 32GB', 'watch': 925, 'exceptional': 850},
+    'onexfly_f1_pro_hx370_32': {'label': 'OneXFly F1 Pro HX 370 32GB+', 'watch': 925, 'exceptional': 850},
     'rog_xbox_ally_x20': {'label': 'ROG Xbox Ally X20 (2026 OLED, 24GB)', 'watch': 1100, 'exceptional': 1000},
-    'zotac_zone': {'label': 'ZOTAC Zone OLED', 'watch': 575, 'exceptional': 500},
+    'zotac_zone': {'label': 'ZOTAC Zone OLED', 'watch': 550, 'exceptional': 500},
     'steam_deck_oled_512': {'label': 'Steam Deck OLED 512GB', 'watch': 625, 'exceptional': 550},
 }
 # Deterministic first-party stores, not search-result redirects or marketplace sellers.
@@ -44,6 +45,7 @@ SHOPS = [
     {'kind': 'html', 'url': 'https://www.zotacstore.com/us/gaming-console', 'seller': 'ZOTAC official', 'condition': 'open-box', 'shipping': None},
     {'kind': 'html', 'url': 'https://store.steampowered.com/steamdeck', 'seller': 'Valve official', 'condition': 'new', 'shipping': None},
 ]
+SHOPS = [s for s in SHOPS if s['seller'] != 'ZOTAC official'] + SOURCES
 FEEDS = [
     'https://slickdeals.net/newsearch.php?' + urlencode({'q': q, 'searcharea': 'deals', 'rss': '1'})
     for q in ['legion go 2', 'onexfly f1 pro', 'xbox ally x20', 'zotac zone', 'steam deck oled']
@@ -65,7 +67,7 @@ def product_model(s: str) -> str | None:
         return None
     if ('legion go 2' in s or 'legion go gen 2' in s) and ('z2 extreme' in s or '83n0000bus' in s) and re.search(r'\b32\s?g(?:b)?\b', s):
         return 'legion_go_2_z2e_32'
-    if re.search(r'one\s?x\s?fly\s*f1\s*pro', s) and re.search(r'(?:hx\s?370|ai\s?9\s*370)', s) and re.search(r'\b32\s?g(?:b)?\b', s):
+    if re.search(r'one\s?x\s?fly\s*f1\s*pro', s) and re.search(r'(?:hx\s?370|ai\s?9\s*370)', s) and re.search(r'\b(?:32|64)\s?g(?:b)?\b', s):
         return 'onexfly_f1_pro_hx370_32'
     if ('ally x20' in s or 'rc74xa' in s) and ('oled' in s or 'rc74xa' in s):
         return 'rog_xbox_ally_x20'
@@ -85,11 +87,15 @@ def deal(spec: dict, name: str, price: float, availability: bool, *, variant: st
     # Product model identity is strongest only for complete SKU / variant.
     shipping = spec['shipping']
     total = round(price + shipping, 2) if shipping is not None else None
+    basis = total if total is not None else price
     level = ('exceptional' if total is not None and total <= MODELS[model]['exceptional'] else
-             'watch' if total is not None and total <= MODELS[model]['watch'] else 'seen')
+             'watch' if total is not None and total <= MODELS[model]['watch'] else
+             'review' if total is None and spec['seller'] in ('DROIX', 'WhatGeek') and price <= MODELS[model]['watch'] else 'seen')
     return {'model': model, 'label': MODELS[model]['label'], 'title': (name + ' ' + variant).strip(),
             'seller': spec['seller'], 'condition': spec['condition'], 'price': round(price, 2),
             'shipping': shipping, 'before_tax': total, 'estimated_total': round(total * (1 + TAX), 2) if total is not None else None,
+            'alert_price': total if total is not None else round(price, 2),
+            'review_required': shipping is None,
             'in_stock': True, 'url': spec['url'], 'level': level, 'evidence': spec['kind']}
 
 
@@ -193,19 +199,22 @@ def api_request(url: str, method: str = 'GET', payload: dict | None = None):
 def send_ntfy(entry: dict):
     topic = os.getenv('NTFY_TOPIC', '').strip()
     if not topic:
-        return
+        return False
     if not re.fullmatch(r'[a-zA-Z0-9_-]{16,100}', topic):
-        raise ValueError('NTFY_TOPIC must be a random non-public topic (16-100 safe characters)')
-    text = f"{entry['label']} ${entry['before_tax']:.2f} + est. 8% NY tax = ${entry['estimated_total']:.2f}; {entry['condition']}; {entry['seller']}. Verify checkout, returns and warranty."
+        raise ValueError('Invalid NTFY_TOPIC')
+    amount = entry['alert_price']
+    qualifier = 'LISTED PRICE; VERIFY SHIPPING/IMPORT COSTS' if entry['review_required'] else 'including shipping, before tax'
+    text = f"{entry['label']} ${amount:.2f} {qualifier}; {entry['condition']}; {entry['seller']}. Verify condition, checkout and warranty."
+    title = 'OLED handheld: review candidate' if entry['review_required'] else 'OLED handheld: ' + entry['level'] + ' price'
     req = Request(f'https://ntfy.sh/{topic}', data=text.encode(), method='POST',
-                  headers={'Title': 'Exceptional OLED handheld deal', 'Priority': 'high', 'Click': entry['url']})
+                  headers={'Title': title, 'Priority': 'high' if entry['level'] == 'exceptional' else 'default', 'Click': entry['url']})
     with urlopen(req, timeout=TIMEOUT) as response:
         if response.status not in (200, 201, 202):
             raise RuntimeError('ntfy failed')
+    return True
 
 
 def report_issue(entry: dict) -> str:
-    """Create one issue per listing/price; dedupe even across ephemeral Actions runners."""
     repo = os.environ.get('GITHUB_REPOSITORY', '')
     if not repo or not os.environ.get('GITHUB_TOKEN'):
         return 'not sent (missing GitHub runtime or token)'
@@ -213,46 +222,47 @@ def report_issue(entry: dict) -> str:
         raise ValueError('Invalid GITHUB_REPOSITORY')
     base = f'https://api.github.com/repos/{repo}'
     marker = issue_marker(entry)
-    issue_title = f"[Handheld deal] {entry['label']} ${entry['before_tax']:.2f} - {entry['seller']}"
-    # One issue per listing: if lower price returns, comment and re-open.
+    cents = round(entry['alert_price'] * 100)
     issues = api_request(base + '/issues?' + urlencode({'state': 'all', 'per_page': '100'}))
-    for issue in issues:
-        if f'<!-- handheld-deal:{marker} -->' in (issue.get('body') or ''):
-            m = re.search(r'<!-- last-cents:(\d+) -->', issue.get('body') or '') or re.search(r'<!-- initial-cents:(\d+) -->', issue.get('body') or '')
-            old = int(m.group(1)) if m else 10**10
-            if round(entry['before_tax'] * 100) >= old - 2500:
-                return 'already alerted at this or similar price'
-            body_now = issue.get('body') or ''
-            marker_now = f"<!-- last-cents:{round(entry['before_tax'] * 100)} -->"
-            if '<!-- last-cents:' in body_now:
-                body_now = re.sub(r'<!-- last-cents:\d+ -->', marker_now, body_now, count=1)
-            else:
-                body_now += '\n' + marker_now
-            api_request(base + f"/issues/{issue['number']}", 'PATCH', {'body': body_now, 'state': 'open'})
-            api_request(base + f"/issues/{issue['number']}/comments", 'POST', {'body': f"Better price now ${entry['before_tax']:.2f} before tax: {entry['url']}"})
-            send_ntfy(entry)
-            return f"commented on issue #{issue['number']} (price improved)"
-    body = (f"<!-- handheld-deal:{marker} -->\n<!-- initial-cents:{round(entry['before_tax'] * 100)} -->\n<!-- last-cents:{round(entry['before_tax'] * 100)} -->\n"
-            f"## {entry['label']} — exceptional listing\n\n**Merchant:** {entry['seller']}  \n"
-            f"**Condition:** {entry['condition']}  \n**Exact listing:** {entry['url']}  \n"
-            f"**Listed:** ${entry['price']:.2f}  \n**US shipping estimate:** ${entry['shipping']:.2f}  \n"
-            f"**Before tax including shipping:** ${entry['before_tax']:.2f}  \n"
-            f"**With approximate 8% NY sales tax:** ${entry['estimated_total']:.2f}  \n"
-            f"**Evidence:** {entry['evidence']}  \n\n"
-            "⚠️ Verify stock, local tax, return terms, warranty and checkout total immediately. Price may change. "
-            "No purchase has been made. The tracker intentionally excludes eBay auctions and search snippets.\n")
-    issue = api_request(base + '/issues', 'POST', {'title': issue_title, 'body': body})
-    try:
-        send_ntfy(entry)
-    except Exception as exc:
-        print(f'WARNING: issue created but ntfy failed: {exc}', file=sys.stderr)
-    return f"created issue #{issue['number']}"
+    existing = next((i for i in issues if f'<!-- handheld-deal:{marker} -->' in (i.get('body') or '')), None)
+    pending = False
+    if existing:
+        oldbody = existing.get('body') or ''
+        m = re.search(r'<!-- last-cents:(\d+) -->', oldbody)
+        old = int(m.group(1)) if m else 10**10
+        pending = '<!-- push-pending -->' in oldbody
+        if cents >= old - 2500 and not pending:
+            return 'already alerted at this or similar price'
+    qualifier = 'Listed price only — shipping/import costs need review' if entry['review_required'] else 'Including shipping, before tax'
+    title = f"[Handheld {'review' if entry['review_required'] else 'deal'}] {entry['label']} ${entry['alert_price']:.2f} - {entry['seller']}"
+    body = (f"<!-- handheld-deal:{marker} -->\n<!-- last-cents:{cents} -->\n<!-- push-pending -->\n"
+            f"## {entry['level'].title()} price\n\n**Price:** ${entry['alert_price']:.2f} — {qualifier}\n\n"
+            f"**Exact configuration:** {entry['title']}\n\n**Seller:** {entry['seller']}\n\n"
+            f"**Condition:** {entry['condition']}\n\n**Listing:** {entry['url']}\n\n"
+            f"**Evidence:** {entry['evidence']}\n\nCheck checkout total, condition, returns and warranty. No purchase made.")
+    if existing:
+        issue = existing
+        api_request(base + f"/issues/{issue['number']}", 'PATCH', {'title': title, 'body': body, 'state': 'open'})
+        if not pending:
+            api_request(base + f"/issues/{issue['number']}/comments", 'POST', {'body': f"Price improved: ${entry['alert_price']:.2f}. {qualifier}. {entry['url']}"})
+    else:
+        issue = api_request(base + '/issues', 'POST', {'title': title, 'body': body})
+    # Leave a pending marker if delivery fails so a later scan retries the push.
+    if send_ntfy(entry):
+        api_request(base + f"/issues/{issue['number']}", 'PATCH', {'body': body.replace('<!-- push-pending -->', '<!-- push-sent -->')})
+    return f"recorded issue #{issue['number']}"
 
 
 def scan() -> dict:
     result = {'checked_at_utc': dt.datetime.now(dt.timezone.utc).isoformat(), 'merchants': [],
               'offers': [], 'discovery': [], 'errors': [], 'alerts': []}
     def merchant(spec):
+        if spec['kind'] in ('shopify_search', 'zotac', 'woo', 'paymore'):
+            try:
+                found, checks = scan_source(spec, fetch, deal, product_model, scan_shopify, scan_html)
+                return {'merchant': spec['seller'], 'url': spec['url'], 'verified': len(found), 'matched_variants': checks, 'coverage_verified': bool(checks or found)}, found, None
+            except Exception as exc:
+                return None, [], {'url': spec['url'], 'error': str(exc)[:180]}
         url = spec['url'].split('?')[0] + '.js' if spec['kind'] == 'shopify' else spec['url']
         try:
             body = fetch(url)
@@ -301,7 +311,7 @@ def main():
     data = scan()
     data['offers'].sort(key=lambda d: (d['level'] != 'exceptional', d['before_tax'] or 9e9))
     for entry in data['offers']:
-        if entry['level'] == 'exceptional':
+        if entry['level'] in ('exceptional', 'watch', 'review'):
             try:
                 status = report_issue(entry)
                 data['alerts'].append({'title': entry['title'], 'status': status})
@@ -312,8 +322,8 @@ def main():
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
     for o in data['offers']:
-        if o['level'] in ('exceptional', 'watch'):
-            print(f"{o['level'].upper()}: {o['label']} {o['seller']} ${o['before_tax']:.2f} {o['url']}")
+        if o['level'] in ('exceptional', 'watch', 'review'):
+            print(f"{o['level'].upper()}: {o['label']} {o['seller']} ${o['alert_price']:.2f} {o['url']}")
     print(f"Scanned {len(SHOPS)} direct merchant pages and {len(FEEDS)} RSS feeds; "
           f"{len(data['offers'])} stock-confirmed matched variants; "
           f"{len(data['discovery'])} unverified discoveries; {len(data['errors'])} failures")

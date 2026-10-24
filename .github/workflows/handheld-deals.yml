@@ -13,6 +13,8 @@ on:
     branches: [main]
     paths:
       - 'monitor.py'
+      - 'expanded_sources.py'
+      - 'tests/**'
       - '.github/workflows/handheld-deals.yml'
 permissions:
   contents: read

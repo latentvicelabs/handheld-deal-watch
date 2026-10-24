@@ -1,41 +1,45 @@
-# OLED handheld deal watcher — Latent Vice Labs
+# OLED handheld deal watch — Latent Vice Labs
 
-Independent, conservative **10-minute** GitHub Actions deal watcher through **November 15, 2026**. Python standard library only. It never purchases anything.
+Personal US deal watcher. Runs on GitHub Actions at `3,13,23,33,43,53` minutes each hour (actual scheduling can be delayed). Scanning ends November 15, 2026. Never purchases anything.
 
-## Deployment status
+## Active phone alert targets
 
-Deployed on October 21, 2026. The initial live scan successfully read the ONEXPLAYER endpoints, but returned no in-stock matching variants. Best Buy timed out, and the other HTML adapters did not extract verified offers. Current automatic alert coverage is ONEXPLAYER F1 Pro HX 370 32GB; other sources remain review-only until their adapters yield verified offers. GitHub Issue notifications are enabled for the owner. An ntfy push destination was configured on October 23, 2026. The notification self-test checks that ntfy accepts a high-priority test message; each phone must subscribe to the topic separately. The topic is stored only as the NTFY_TOPIC repository secret.
-
-Scans run concurrently, verify Shopify store currency is USD, and publish coverage details to the Actions summary. Total loss of validated merchant coverage fails the run rather than claiming no deals. Out-of-stock matching variants count as working coverage, not available offers.
-
-## Setup
-
-1. Create a **new non-fork** repository named `latentvicelabs/handheld-deal-watch` and put these files on `main`. **Do not install into the unrelated `workflow_templates` ComfyUI fork**: fork schedules are disabled by default and its workflows have other jobs.
-2. In GitHub **Settings → Actions → General**, ensure Actions is enabled; in repository settings ensure Issues are enabled. Open **Actions → OLED handheld deal watch → Run workflow** for an initial execution and inspect the `report.json` artifact. Scheduled checks use `3,13,23,33,43,53` minutes of each hour (UTC); GitHub can delay/drop runs.
-3. For mobile pushes (optional but recommended), create an unpredictable `ntfy.sh` topic and subscribe to it using the ntfy app. Set repository secret **`NTFY_TOPIC`** to the topic name; do **not** commit a topic secret. Otherwise exceptional deals create GitHub Issues (check GitHub notifications / Watch settings). GitHub Issues are not a guaranteed real-time push channel.
-4. Review the Action logs/`report.json` after first run; merchants may block GitHub runner IPs. Failed sources are reported instead of producing fake prices. Any separately configured ChatGPT alert is independent; this repository does not create or verify one.
-
-## Watched prices, USD **including US shipping, before tax**
-
-| Exact product | Watch | Exceptional alert |
+| Device | Good-price push | Exceptional high-priority push |
 |---|---:|---:|
-| Lenovo Legion Go 2 **Z2 Extreme**, 32GB | $1,100 | $1,000 |
-| OneXFly F1 Pro **HX 370**, 32GB | $925 | $850 |
-| ASUS ROG Xbox Ally **X20 2026 OLED**, 24GB | $1,100 | $1,000 |
-| ZOTAC Zone OLED | $575 | $500 |
-| Steam Deck **OLED 512GB** | $625 | $550 |
+| OneXFly F1 Pro **HX 370, 32GB or 64GB** | $925 | $850 |
+| ZOTAC Zone **8840U OLED, open-box** | $550 | $500 |
 
-Direct sellers first. Only exact Shopify variants with explicit `available=true` and actual USD price can currently fire mobile/Issue alerts without additional checkout data. For the other direct merchant pages, the program checks explicit JSON-LD **InStock** and actual offer price, but **leaves shipping unverified** and *never automatically alerts* until shipping evidence is available. Discovery feeds (Slickdeals search RSS and Reddit RSS) are expressly for manual review and do not generate alerts. eBay is excluded: no noisy auction or unverified reseller alerts. No deal is claimed based on Google/Bing snippets, MSRP comparisons, a product's minimum variant price, or missing inventory evidence.
+Thresholds include shipping when known and exclude tax. Unknown shipping/import costs generate **review candidate** notifications at the good-price ceiling, explicitly labeled as listed price only. These are leads to inspect, not confirmed landed-cost bargains. No assumed coupon savings.
 
-US shipping is set to $0 for ONEXPLAYER *devices*, per the manufacturer's US shipping policy; confirm ZIP-specific exceptions at checkout. ONEXPLAYER warranties and returns differ from Best Buy/Valve. Displayed 8% NY sales tax is an **estimate** and may not be collected by the merchant. Never interpret the estimate as a quote.
+## F1 Pro sources
 
-**Coverage limitation:** there is no reliable free universal product price/availability API. This is high-confidence partial coverage, not a comprehensive 10-minute scan of all retailers. Better feed/API integrations can be added without weakening the validation rules.
+- **ONEXPLAYER official:** new and manufacturer refurbished; exact Shopify variants and USD currency.
+- **ItsWorthMore:** searches the live store for newly listed F1 Pro products every scan, then checks exact condition/stock variants. Free US standard shipping per https://buy.itsworthmore.com/policies/shipping-policy . This can find replacement listing URLs, unlike a fixed sold-out link.
+- **PayMore Seven Oaks:** the verified exact product listing at https://paymore.com/shop/product/15362360082646/ . Explicit USD/stock schema and free shipping; fixed-listing coverage, not all PayMore stores. Currently out of stock.
+- **WhatGeek:** exact US F1 Pro variants; store currency must be USD. Shipping is unverified, so qualifying offers produce review candidates.
+- **DROIX:** exact CPU/RAM/condition variants, explicit USD currency and inventory. Uses full `display_price`, never the advertised deposit. Shipping/import costs are unverified, so qualifying offers produce review candidates.
 
-## Local
+HX 365 and 8840U F1 variants are excluded. 64GB configurations qualify at the same ceilings; extra RAM does not raise the budget.
 
-```bash
+## ZOTAC alternative
+
+Uses the **actual open-box product page**, https://www.zotacstore.com/us/open-box/zone-handheld/gaming-console , rather than the old category-page adapter. Requires exact ZGC-G1A1W-01 identity, current USD price, explicit product stock status, and free-shipping evidence. Tracks current price, not crossed-out MSRP. Checked October 23, 2026: in stock at $639.99, above the alert ceiling.
+
+## Remaining coverage
+
+Legacy Best Buy Legion Go 2, ASUS X20 and Valve pages are still scanned, but are not validated reliable alert sources. They may time out or expose no parseable offers. Slickdeals and Reddit RSS are discovery-only and never generate phone pushes. eBay remains excluded.
+
+Every scan records reachable sources, matching configurations (including out-of-stock ones), offers and failures. Total loss of validated merchant coverage fails the workflow. A successful run means some validated coverage exists; it does not mean every source worked.
+
+## Notifications and operation
+
+`NTFY_TOPIC` is stored as a GitHub Actions secret, never in source. The owner's phone subscription was tested. Good prices and review candidates use normal priority; exceptional verified deals use high priority. GitHub Issues retain alerts and suppress repeats; a drop of more than $25 updates an existing alert. Failed phone pushes leave a pending marker and retry on a future scan while the listing still qualifies.
+
+Actions → OLED handheld deal watch → Run workflow → check `test_notification` sends a clearly labeled setup test. Inspect the run summary or `report.json` artifact for source health. The notification topic is intentionally omitted from this README.
+
+```sh
 python -m unittest discover -s tests -v
-python monitor.py # saves report.json; no GitHub issues unless in a GitHub Actions environment
+python monitor.py  # local scan, no notifications without GitHub runtime credentials
 ```
 
-Reports have direct scan failures and unverified RSS candidate links. Events generate one GitHub Issue per exact deal URL/condition; repeats are suppressed, and a price improvement of more than $25 adds a comment. No extra Actions secrets needed for GitHub Issues (`GITHUB_TOKEN` is automatic).
+Private-repository Actions usage draws on the owner's allowance. Standard jobs round up to whole minutes. Repository/account visibility and billing settings are unchanged.
