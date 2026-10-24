@@ -44,21 +44,21 @@ jobs:
           import os
           import json, re
           from urllib.request import Request, urlopen
-          from monitor import api_request
+          from monitor import api_request, notification_scope
           topic = os.getenv("NTFY_TOPIC", "").strip()
           if topic:
               if not re.fullmatch(r"[a-zA-Z0-9_-]{16,100}", topic):
                   raise ValueError("Invalid notification topic")
               req = Request("https://ntfy.sh/" + topic,
-                            data=b"Handheld deal push alerts are connected. This is a setup test, not a deal.",
-                            headers={"Title": "Handheld alerts: test", "Priority": "high"})
+                            data=("SETUP TEST — not a deal. " + notification_scope()).encode(),
+                            headers={"Title": "Five-device watcher: delivery test", "Priority": "high"})
               with urlopen(req, timeout=20) as response:
                   receipt = json.load(response)
               print("ntfy accepted test notification:", receipt["id"])
           base = "https://api.github.com/repos/" + os.environ["GITHUB_REPOSITORY"]
           issue = api_request(base + "/issues", "POST", {
               "title": "[Setup test] Handheld deal alerts are connected — no deal",
-              "body": "This is a notification delivery test from GitHub Actions, not a price alert. Scheduled scans are installed. Real alerts require verified stock, model, USD price and the exceptional threshold. This setup test closes automatically."})
+              "body": "This is a delivery test, not a deal or a coverage test. " + notification_scope() + " Qualifying offers can trigger good-price, exceptional-price, or shipping-unverified review notifications. This test closes automatically."})
           print("Created notification test:", issue["html_url"])
           api_request(base + "/issues/" + str(issue["number"]), "PATCH", {"state": "closed"})
           PYTHON

@@ -28,11 +28,69 @@ TAX = 0.08  # NY estimate only; NOT a tax quote
 END = dt.date(2026, 11, 15)
 MODELS = {
     'legion_go_2_z2e_32': {'label': 'Legion Go 2 Z2 Extreme 32GB', 'watch': 1100, 'exceptional': 1000},
-    'onexfly_f1_pro_hx370_32': {'label': 'OneXFly F1 Pro HX 370 32GB+', 'watch': 925, 'exceptional': 850},
-    'rog_xbox_ally_x20': {'label': 'ROG Xbox Ally X20 (2026 OLED, 24GB)', 'watch': 1100, 'exceptional': 1000},
+    'onexfly_f1_pro_hx370_32': {'label': 'OneXFly F1 Pro HX 370 32/64GB', 'watch': 925, 'exceptional': 850},
+    'rog_xbox_ally_x20': {'label': 'ROG Xbox Ally X20 / RC74XA OLED', 'watch': 1100, 'exceptional': 1000},
     'zotac_zone': {'label': 'ZOTAC Zone OLED', 'watch': 550, 'exceptional': 500},
     'steam_deck_oled_512': {'label': 'Steam Deck OLED 512GB', 'watch': 625, 'exceptional': 550},
 }
+# Coverage describes the existing adapters; it does not enable or disable alerts.
+MODEL_SCOPE = {
+    'legion_go_2_z2e_32': {'short': 'Legion Go 2', 'sellers': ('Best Buy',), 'push': False,
+        'note': 'Scanned; Best Buy has timed out in live runs. Unknown shipping keeps extracted offers report-only.'},
+    'onexfly_f1_pro_hx370_32': {'short': 'F1 Pro', 'sellers': ('ONEXPLAYER official', 'ItsWorthMore', 'PayMore Seven Oaks', 'WhatGeek', 'DROIX'), 'push': True,
+        'note': 'Live-validated adapters; availability varies by seller. WhatGeek/DROIX can send shipping-unverified review candidates.'},
+    'rog_xbox_ally_x20': {'short': 'ROG Xbox Ally X20', 'sellers': ('ASUS official',), 'push': False,
+        'note': 'Scanned; no verified offers extracted in live checks. Unknown shipping keeps offers report-only; matcher does not require a RAM capacity.'},
+    'zotac_zone': {'short': 'ZOTAC Zone', 'sellers': ('ZOTAC official',), 'push': True,
+        'note': 'Live-validated official open-box product adapter; stock and shipping evidence are checked each run.'},
+    'steam_deck_oled_512': {'short': 'Steam Deck OLED 512GB', 'sellers': ('Valve official',), 'push': False,
+        'note': 'Scanned; no verified offers extracted in live checks. Unknown shipping keeps offers report-only.'},
+}
+
+
+def scope_table():
+    lines = ['| Configured device | Good-price threshold | Exceptional threshold | Current notification coverage |',
+             '|---|---:|---:|---|']
+    for key, model in MODELS.items():
+        mode = 'Push-capable; partial seller coverage' if MODEL_SCOPE[key]['push'] else 'Report-only with current adapters'
+        lines.append(f"| {model['label']} | ${model['watch']:,} | ${model['exceptional']:,} | {mode} |")
+    return '\n'.join(lines)
+
+
+def notification_scope():
+    configured = ', '.join(MODEL_SCOPE[k]['short'] for k in MODELS)
+    active = ', '.join(v['short'] for v in MODEL_SCOPE.values() if v['push'])
+    limited = ', '.join(v['short'] for v in MODEL_SCOPE.values() if not v['push'])
+    return (f"Configured scan: {configured}. Push-capable adapters: {active}. "
+            f"Report-only/limited adapters: {limited}. Coverage is partial; a successful scan or push test does not validate every source.")
+
+
+def coverage_rows(data):
+    rows = []
+    for key, model in MODELS.items():
+        sellers = MODEL_SCOPE[key]['sellers']
+        specs = [s for s in SHOPS if s['seller'] in sellers]
+        urls = {s['url'] for s in specs}
+        reached = [m for m in data['merchants'] if m['url'] in urls]
+        failed = [e for e in data['errors'] if e['url'] in urls]
+        checks = [v for m in reached for v in m.get('matched_variants', []) if v.get('model') == key]
+        offers = [o for o in data['offers'] if o['model'] == key]
+        status = 'matched stock/offer evidence' if checks or offers else 'page reached; no matched evidence' if reached else 'unreachable' if failed else 'not checked'
+        rows.append({'model': key, 'label': model['label'], 'status': status,
+                     'configured_sources': len(specs), 'reached_sources': len(reached), 'failed_sources': len(failed),
+                     'push_capable': MODEL_SCOPE[key]['push'], 'note': MODEL_SCOPE[key]['note']})
+    return rows
+
+
+def notification_content(entry):
+    qualifier = 'LISTED PRICE; VERIFY SHIPPING/IMPORT COSTS' if entry['review_required'] else 'including shipping, before tax'
+    kind = 'review candidate' if entry['review_required'] else entry['level'] + ' price'
+    title = f"{MODEL_SCOPE[entry['model']]['short']}: {kind}"
+    text = (f"{entry['label']} ${entry['alert_price']:.2f} {qualifier}; {entry['condition']}; {entry['seller']}. "
+            f"Coverage: this seller offer only, not a complete market check. Verify condition, checkout and warranty.")
+    return title, text
+
+
 # Deterministic first-party stores, not search-result redirects or marketplace sellers.
 SHOPS = [
     {'kind': 'shopify', 'url': 'https://onexplayerstore.com/products/onexfly-f1-pro-wolrd-s-first-amd-ai-370-oled-144hz-gaming-handheld-console', 'seller': 'ONEXPLAYER official', 'condition': 'new', 'shipping': 0},
@@ -202,10 +260,7 @@ def send_ntfy(entry: dict):
         return False
     if not re.fullmatch(r'[a-zA-Z0-9_-]{16,100}', topic):
         raise ValueError('Invalid NTFY_TOPIC')
-    amount = entry['alert_price']
-    qualifier = 'LISTED PRICE; VERIFY SHIPPING/IMPORT COSTS' if entry['review_required'] else 'including shipping, before tax'
-    text = f"{entry['label']} ${amount:.2f} {qualifier}; {entry['condition']}; {entry['seller']}. Verify condition, checkout and warranty."
-    title = 'OLED handheld: review candidate' if entry['review_required'] else 'OLED handheld: ' + entry['level'] + ' price'
+    title, text = notification_content(entry)
     req = Request(f'https://ntfy.sh/{topic}', data=text.encode(), method='POST',
                   headers={'Title': title, 'Priority': 'high' if entry['level'] == 'exceptional' else 'default', 'Click': entry['url']})
     with urlopen(req, timeout=TIMEOUT) as response:
@@ -239,7 +294,7 @@ def report_issue(entry: dict) -> str:
             f"## {entry['level'].title()} price\n\n**Price:** ${entry['alert_price']:.2f} — {qualifier}\n\n"
             f"**Exact configuration:** {entry['title']}\n\n**Seller:** {entry['seller']}\n\n"
             f"**Condition:** {entry['condition']}\n\n**Listing:** {entry['url']}\n\n"
-            f"**Evidence:** {entry['evidence']}\n\nCheck checkout total, condition, returns and warranty. No purchase made.")
+            f"**Evidence:** {entry['evidence']}\n\n**Coverage:** {MODEL_SCOPE[entry['model']]['note']} This alert covers this seller offer only.\n\nCheck checkout total, condition, returns and warranty. No purchase made.")
     if existing:
         issue = existing
         api_request(base + f"/issues/{issue['number']}", 'PATCH', {'title': title, 'body': body, 'state': 'open'})
@@ -301,6 +356,7 @@ def scan() -> dict:
             result['discovery'].extend(found)
             if error:
                 result['errors'].append(error)
+    result['coverage'] = coverage_rows(result)
     return result
 
 
@@ -327,12 +383,18 @@ def main():
     print(f"Scanned {len(SHOPS)} direct merchant pages and {len(FEEDS)} RSS feeds; "
           f"{len(data['offers'])} stock-confirmed matched variants; "
           f"{len(data['discovery'])} unverified discoveries; {len(data['errors'])} failures")
+    for coverage in data['coverage']:
+        print(f"COVERAGE: {coverage['label']}: {coverage['status']}; reached {coverage['reached_sources']}/{coverage['configured_sources']}; {'push-capable' if coverage['push_capable'] else 'report-only'}")
     for error in data['errors']:
         print(f"SOURCE FAILED: {error['url']} — {error['error']}")
     summary = os.getenv('GITHUB_STEP_SUMMARY')
     if summary:
-        lines = ['## OLED handheld scan', f"Matched offers: {len(data['offers'])}; source failures: {len(data['errors'])}.", '',
+        lines = ['## Five-device OLED handheld scan', notification_scope(), '', scope_table(), '', f"Matched offers: {len(data['offers'])}; source failures: {len(data['errors'])}.", '',
                  '| Model | Seller | Price | Shipping | Classification |', '|---|---|---:|---:|---|']
+        coverage_lines = ['### Coverage in this run', '| Device | Evidence | Sources reached | Failed | Notification mode |', '|---|---|---:|---:|---|']
+        for row in data['coverage']:
+            coverage_lines.append(f"| {row['label']} | {row['status']} | {row['reached_sources']}/{row['configured_sources']} | {row['failed_sources']} | {'Push-capable' if row['push_capable'] else 'Report-only'} |")
+        lines[1:1] = coverage_lines + ['']
         for offer in data['offers']:
             lines.append(f"| {offer['label']} | {offer['seller']} | ${offer['price']:.2f} | {offer['shipping']} | {offer['level']} |")
         lines.extend(['', '### Stock checks'] + [f"- {m['merchant']}: {v['variant']} — {'in stock' if v['in_stock'] else 'out of stock'} (${v['price']:.2f})" for m in data['merchants'] for v in m.get('matched_variants', [])])
